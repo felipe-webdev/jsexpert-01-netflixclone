@@ -1,11 +1,14 @@
 class VideoPlayer {
-  constructor({ manifestJSON, network }) {
+  constructor({ manifestJSON, network, videoComponent }) {
     this.manifestJSON = manifestJSON
     this.network = network
+    this.videoComponent = videoComponent
     this.videoElement = null
     this.sourceBuffer = null
+    this.activeItem = {}
     this.selected = {}
     this.videoDuration = 0
+    this.selections = []
   }
 
   initializeCodec() {
@@ -34,13 +37,60 @@ class VideoPlayer {
       const selected = this.selected = this.manifestJSON.intro
       mediaSource.duration = this.videoDuration //avoid displaying duration as LIVE
       await this.fileDowload(selected.url)
+      setInterval(this.waitForQuestions.bind(this), 200)
     }
   }
 
+  waitForQuestions() {
+    const currentTime = parseInt(this.videoElement.currentTime)
+    const option = this.selected.at === currentTime
+    if (!option) return;
+    // avoid modal opening twice at same second
+    if (this.activeItem.url === this.selected.url) return;
+    this.videoComponent.configureModal(this.selected.options)
+    this.activeItem = this.selected
+  }
+
+  async currentFileResolution() {
+    const LOWEST_RESOLUTION = 144
+    const prepareUrl = {
+      url: this.manifestJSON.finalizar.url,
+      fileResolution: LOWEST_RESOLUTION,
+      fileResolutionTag: this.manifestJSON.fileResolutionTag,
+      hostTag: this.manifestJSON.hostTag
+    }
+    const url = this.network.parseManifestUrl(prepareUrl)
+    return this.network.getProperResolution(url)
+  }
+
+  async nextChunk(data) {
+    const key = data.toLowerCase()
+    const selected = this.manifestJSON[key]
+    this.selected = {
+      ...selected,
+      // set the time to display modal dialog based on current time
+      at: parseInt(this.videoElement.currentTime + selected.at)
+    }
+    this.manageLag(this.selected)
+    // keep on playing the video while downloading next
+    this.videoElement.play()
+    await this.fileDowload(selected.url)
+  }
+
+  manageLag(selected) {
+    if (!!~this.selections.indexOf(selected.url)) {
+      selected.at += 5
+      return;
+    }
+    this.selections.push(selected.url)
+  }
+
   async fileDowload(url) {
+    const fileResolution = await this.currentFileResolution()
+    console.log('currentResolution', fileResolution)
     const prepareUrl = {
       url,
-      fileResolution: 360,
+      fileResolution,
       fileResolutionTag: this.manifestJSON.fileResolutionTag,
       hostTag: this.manifestJSON.hostTag
     }
@@ -53,7 +103,7 @@ class VideoPlayer {
   setVideoPlayerDuration(finalURL) {
     const bars = finalURL.split('/')
     const [ name, videoDuration ] = bars[bars.length - 1].split('-')
-    this.videoDuration += videoDuration
+    this.videoDuration += parseFloat(videoDuration)
   }
 
   async processBufferSegments(allSegments) {
